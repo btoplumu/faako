@@ -22,11 +22,16 @@ class SignedPost(BaseModel):
     avatar: str
     bio: str
     message: str
-    image: str | None = ""  # Yeni: Gönderi görseli (Base64)
+    image: str | None = ""  # Gönderi görseli (Base64)
     reply_to: int | None = None
     signature_hex: str
 
 class ActionPayload(BaseModel):
+    public_key_hex: str
+    post_id: int
+    signature_hex: str
+
+class DeletePayload(BaseModel):
     public_key_hex: str
     post_id: int
     signature_hex: str
@@ -106,6 +111,28 @@ def repost_post(action: ActionPayload):
             return {"status": "success", "reposts_count": len(post["reposts"])}
 
     raise HTTPException(status_code=404, detail="Gönderi bulunamadı.")
+
+@app.post("/api/delete")
+def delete_post(action: DeletePayload):
+    try:
+        payload_to_verify = f"delete:{action.post_id}"
+        verify_key = VerifyKey(bytes.fromhex(action.public_key_hex))
+        verify_key.verify(payload_to_verify.encode('utf-8'), bytes.fromhex(action.signature_hex))
+    except (BadSignatureError, ValueError):
+        raise HTTPException(status_code=401, detail="İmza geçersiz!")
+
+    global FEED
+    target_post = next((p for p in FEED if p["id"] == action.post_id), None)
+    
+    if not target_post:
+        raise HTTPException(status_code=404, detail="Gönderi bulunamadı.")
+    
+    if target_post["author_pubkey"] != action.public_key_hex:
+        raise HTTPException(status_code=403, detail="Bu gönderiyi silme yetkin yok.")
+
+    # Gönderiyi ve buna bağlı yanıtları akıştan çıkar
+    FEED = [p for p in FEED if p["id"] != action.post_id and p.get("reply_to") != action.post_id]
+    return {"status": "success"}
 
 @app.get("/api/feed")
 def get_feed():
